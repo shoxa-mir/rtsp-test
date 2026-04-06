@@ -5,3 +5,4 @@ numpy==1.26.4
 opencv-python==4.8.0.76
 onnxruntime-gpu==1.15.1
 psutil==6.1.1
+pyinstaller
