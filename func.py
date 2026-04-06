@@ -7,6 +7,7 @@ from tkinter import filedialog
 
 from base import BaseApp
 from capture import CaptureManager, FramePacket
+from yolo import InferenceEngine
 
 
 class App(BaseApp):
@@ -20,9 +21,14 @@ class App(BaseApp):
         self.fps_timestamps: list[deque] = [deque(maxlen=30) for _ in range(self.num_channels)]
         self.resolutions: list[tuple[int, int] | None] = [None] * self.num_channels
         self.frame_skip_counters = [0] * self.num_channels
+        self.detection_counts: list[int | None] = [None] * self.num_channels
         self.channel_state_lock = Lock()
         self.channel_states = [self._default_channel_state() for _ in range(self.num_channels)]
         self._rendered_states: list[dict] = [{} for _ in range(self.num_channels)]
+        _onnx = next(Path(__file__).parent.glob("*.onnx"), None)
+        self._inference_engine: InferenceEngine | None = (
+            InferenceEngine(_onnx) if _onnx else None
+        )
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
         self._initialize_channel_controls()
         self._start_ui_refresh()
@@ -45,7 +51,7 @@ class App(BaseApp):
                 frames="0",
                 fps="0.0",
                 resolution="-",
-                extra="Latency: -",
+                extra="Detections: -",
                 connect_text="Retry",
                 connect_enabled=True,
                 disconnect_enabled=True,
@@ -54,7 +60,7 @@ class App(BaseApp):
                 channel_index=channel_index,
                 source=entered_text,
                 processor=self.process_frame,
-                convert_to_rgb=False,
+                convert_to_rgb=self._inference_engine is not None,
             )
             message = f"Channel {channel_index + 1}: connecting to RTSP stream"
         else:
@@ -150,7 +156,11 @@ class App(BaseApp):
 
         self.frame_skip_counters[idx] += 1
         if self.frame_skip_counters[idx] % self.INFERENCE_EVERY_N == 0:
-            pass  # CV pipeline goes here — packet.frame_rgb is the RGB numpy array
+            if self._inference_engine is not None and packet.frame_rgb is not None:
+                try:
+                    self.detection_counts[idx] = self._inference_engine.run(packet.frame_rgb)
+                except Exception:
+                    pass
 
     def _get_fps(self, idx: int) -> float:
         ts = self.fps_timestamps[idx]
@@ -164,6 +174,7 @@ class App(BaseApp):
         self.fps_timestamps.append(deque(maxlen=30))
         self.resolutions.append(None)
         self.frame_skip_counters.append(0)
+        self.detection_counts.append(None)
         self.channel_states.append(self._default_channel_state())
         self._rendered_states.append({})
         self.num_channels += 1
@@ -179,6 +190,7 @@ class App(BaseApp):
         self.fps_timestamps.pop(channel_index)
         self.resolutions.pop(channel_index)
         self.frame_skip_counters.pop(channel_index)
+        self.detection_counts.pop(channel_index)
         self.channel_states.pop(channel_index)
         self._rendered_states.pop(channel_index)
         self.num_channels -= 1
@@ -221,13 +233,15 @@ class App(BaseApp):
                 elif self.frame_counts[channel_index] > 0:
                     res = self.resolutions[channel_index]
                     resolution = f"{res[0]}x{res[1]}" if res else "-"
+                    det = self.detection_counts[channel_index]
+                    extra = f"Detections: {det}" if det is not None else "Detections: -"
                     self._set_channel_state(
                         channel_index,
                         state="Streaming",
                         frames=str(self.frame_counts[channel_index]),
                         fps=f"{self._get_fps(channel_index):.1f}",
                         resolution=resolution,
-                        extra="Latency: Live",
+                        extra=extra,
                         connect_text="Retry",
                         connect_enabled=True,
                         disconnect_enabled=True,
@@ -275,7 +289,7 @@ class App(BaseApp):
             "frames": "0",
             "fps": "0.0",
             "resolution": "-",
-            "extra": "Latency: -",
+            "extra": "Detections: -",
             "connect_text": "Connect",
             "connect_enabled": True,
             "disconnect_enabled": False,

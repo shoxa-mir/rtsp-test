@@ -327,7 +327,7 @@ class BaseApp(CTk):
         resolution_label = CTkLabel(stats_content, text="Resolution: -", anchor="w")
         resolution_label.grid(row=1, column=0, sticky="w", padx=(0, 12))
 
-        extra_label = CTkLabel(stats_content, text="Latency: -", anchor="w")
+        extra_label = CTkLabel(stats_content, text="Detections: -", anchor="w")
         extra_label.grid(row=1, column=1, sticky="w")
 
         self.stats_value_labels.append({
@@ -411,7 +411,7 @@ class BaseApp(CTk):
         frames: str = "0",
         fps: str = "0.0",
         resolution: str = "-",
-        extra: str = "Latency: -",
+        extra: str = "Detections: -",
     ) -> None:
         if 0 <= channel_index < len(self.stats_value_labels):
             labels = self.stats_value_labels[channel_index]
@@ -462,9 +462,9 @@ class BaseApp(CTk):
         base_path = Path(__file__).resolve().parent
 
         return {
-            "play": self._load_single_icon(base_path / "play.png", icon_size),
-            "reconnect": self._load_single_icon(base_path / "reconnect.png", icon_size),
-            "stop": self._load_single_icon(base_path / "stop.png", icon_size),
+            "play": self._load_single_icon(base_path / "icons" / "play.png", icon_size),
+            "reconnect": self._load_single_icon(base_path / "icons" / "reconnect.png", icon_size),
+            "stop": self._load_single_icon(base_path / "icons" / "stop.png", icon_size),
         }
 
     @staticmethod
