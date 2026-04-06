@@ -1,6 +1,7 @@
-opencv-python
-
-customtkinter==5.0.0
-numpy==2.0.0
-ffmpeg-python==0.2.0
-ultralytics==8.0.0
+customtkinter==5.2.2
+av==15.1.0
+Pillow==11.0.0
+numpy==2.3.5
+opencv-python==4.8.0.76
+ultralytics==8.3.237
+onnxruntime-gpu==1.15.1
