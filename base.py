@@ -1,9 +1,46 @@
+import subprocess
+import threading
 from pathlib import Path
+from time import sleep
 from tkinter import Menu
 
+import psutil
 from PIL import Image
 
-from customtkinter import CTk, CTkButton, CTkEntry, CTkFrame, CTkImage, CTkLabel, CTkScrollableFrame, CTkToplevel
+from customtkinter import CTk, CTkButton, CTkEntry, CTkFrame, CTkImage, CTkLabel, CTkProgressBar, CTkScrollableFrame, CTkToplevel
+
+_NVML_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_gpu_util_value: int = 0
+_gpu_util_lock = threading.Lock()
+
+
+def _run_nvidia_smi() -> int | None:
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=_NVML_FLAGS,
+        )
+        if r.returncode == 0:
+            return int(r.stdout.strip().split("\n")[0])
+    except Exception:
+        pass
+    return None
+
+
+def _gpu_poll_loop() -> None:
+    global _gpu_util_value
+    while True:
+        val = _run_nvidia_smi()
+        if val is not None:
+            with _gpu_util_lock:
+                _gpu_util_value = val
+        sleep(1.0)
+
+
+_GPU_AVAILABLE = _run_nvidia_smi() is not None
+if _GPU_AVAILABLE:
+    threading.Thread(target=_gpu_poll_loop, daemon=True).start()
 
 
 class BaseApp(CTk):
@@ -13,6 +50,7 @@ class BaseApp(CTk):
     CHANNEL_SPACING = 8
     PANEL_WIDTH = 460
     CARD_MIN_HEIGHT = 80
+    SYS_REFRESH_MS = 1000
 
     def __init__(self, num_channels: int = DEFAULT_CHANNELS) -> None:
         super().__init__()
@@ -74,10 +112,56 @@ class BaseApp(CTk):
         if self.num_channels >= self.MAX_CHANNELS:
             self.add_channel_btn.configure(state="disabled")
 
-        self.label = CTkLabel(self, text="Enter RTSP URL")
-        self.label.pack(pady=(0, 16))
-
+        self._build_bottom_bar()
         self.bind_shortcuts()
+        self._start_sys_monitor()
+
+    def _build_bottom_bar(self) -> None:
+        bottom_bar = CTkFrame(self, height=44, corner_radius=0, fg_color="transparent")
+        bottom_bar.pack(fill="x", padx=16, pady=(0, 12))
+        bottom_bar.pack_propagate(False)
+
+        self.label = CTkLabel(bottom_bar, text="", anchor="center")
+        self.label.pack(side="left", expand=True, fill="x", padx=(4, 16))
+
+        def _make_bar_group(parent: CTkFrame, title: str, enabled: bool) -> tuple[CTkProgressBar, CTkLabel]:
+            group = CTkFrame(parent, fg_color="transparent")
+            group.pack(side="right", padx=8)
+            CTkLabel(group, text=title, width=32, anchor="w").pack(side="left")
+            bar = CTkProgressBar(group, width=100, height=12)
+            bar.set(0)
+            if not enabled:
+                bar.configure(progress_color="gray40")
+            bar.pack(side="left", padx=(4, 4))
+            pct = CTkLabel(group, text="N/A" if not enabled else "0%", width=40, anchor="e")
+            pct.pack(side="left")
+            return bar, pct
+
+        self._gpu_bar: CTkProgressBar | None
+        self._gpu_pct_label: CTkLabel | None
+        self._gpu_bar, self._gpu_pct_label = _make_bar_group(bottom_bar, "GPU", _GPU_AVAILABLE)
+        self._ram_bar, self._ram_pct_label = _make_bar_group(bottom_bar, "RAM", True)
+        self._cpu_bar, self._cpu_pct_label = _make_bar_group(bottom_bar, "CPU", True)
+
+    def _start_sys_monitor(self) -> None:
+        self.after(self.SYS_REFRESH_MS, self._refresh_sys_stats)
+
+    def _refresh_sys_stats(self) -> None:
+        cpu = psutil.cpu_percent() / 100.0
+        ram = psutil.virtual_memory().percent / 100.0
+        self._cpu_bar.set(cpu)
+        self._cpu_pct_label.configure(text=f"{cpu * 100:.0f}%")
+        self._ram_bar.set(ram)
+        self._ram_pct_label.configure(text=f"{ram * 100:.0f}%")
+
+        if _GPU_AVAILABLE and self._gpu_bar is not None:
+            with _gpu_util_lock:
+                gpu = _gpu_util_value
+            self._gpu_bar.set(gpu / 100.0)
+            self._gpu_pct_label.configure(text=f"{gpu}%")
+
+        if self.winfo_exists():
+            self.after(self.SYS_REFRESH_MS, self._refresh_sys_stats)
 
     def menu_bar_layout(self) -> None:
         self.menu_button = CTkButton(
