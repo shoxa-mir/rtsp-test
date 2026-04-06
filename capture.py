@@ -192,6 +192,17 @@ class CaptureManager:
         with self._lock:
             return channel_index in self._workers
 
+    def shift_workers_down(self, from_index: int) -> None:
+        with self._lock:
+            new_workers = {}
+            for idx, worker in self._workers.items():
+                if idx < from_index:
+                    new_workers[idx] = worker
+                elif idx > from_index:
+                    worker.channel_index = idx - 1
+                    new_workers[idx - 1] = worker
+            self._workers = new_workers
+
     def set_processor(
         self,
         channel_index: int,

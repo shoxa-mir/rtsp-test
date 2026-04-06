@@ -7,32 +7,32 @@ from customtkinter import CTk, CTkButton, CTkEntry, CTkFrame, CTkImage, CTkLabel
 
 
 class BaseApp(CTk):
-    CHANNEL_LAYOUTS = {
-        4: {"channel_spacing": 14},
-        8: {"channel_spacing": 10},
-        12: {"channel_spacing": 8},
-    }
+    DEFAULT_CHANNELS = 4
+    MIN_CHANNELS = 1
+    MAX_CHANNELS = 40
+    CHANNEL_SPACING = 8
     PANEL_WIDTH = 460
     CARD_MIN_HEIGHT = 80
 
-    def _get_layout(self, num_channels: int) -> dict:
-        if num_channels in self.CHANNEL_LAYOUTS:
-            return self.CHANNEL_LAYOUTS[num_channels]
-        return {"channel_spacing": max(4, int(14 - (num_channels - 4) * 0.5))}
-
-    def __init__(self, num_channels: int = 12) -> None:
+    def __init__(self, num_channels: int = DEFAULT_CHANNELS) -> None:
         super().__init__()
 
-        if num_channels < 1:
-            raise ValueError("num_channels must be at least 1")
+        if not (self.MIN_CHANNELS <= num_channels <= self.MAX_CHANNELS):
+            raise ValueError(f"num_channels must be between {self.MIN_CHANNELS} and {self.MAX_CHANNELS}")
 
         self.num_channels = num_channels
         self.entries: list[CTkEntry] = []
         self.channel_boxes: list[CTkFrame] = []
+        self.channel_labels: list[CTkLabel] = []
         self.connect_buttons: list[CTkButton] = []
         self.disconnect_buttons: list[CTkButton] = []
+        self.stats_rows: list[CTkFrame] = []
         self.stats_badges: list[CTkLabel] = []
         self.stats_value_labels: list[dict[str, CTkLabel]] = []
+        self.delete_buttons: list[CTkButton] = []
+        self.channel_tags: list[str] = []
+        self.tag_entries: list[CTkEntry] = []
+        self.tag_save_btns: list[CTkButton] = []
         self.options_window: CTkToplevel | None = None
         self.about_window: CTkToplevel | None = None
         self.active_entry: CTkEntry | None = None
@@ -60,6 +60,19 @@ class BaseApp(CTk):
 
         self.channel_box_layout()
         self.stats_box_layout()
+
+        for i in range(self.num_channels):
+            self._add_channel_row(i)
+
+        self.add_channel_btn = CTkButton(
+            self.scroll_frame,
+            text="+ Add Channel",
+            width=200,
+            command=self.add_channel,
+        )
+        self.add_channel_btn.grid(row=1, column=0, columnspan=2, pady=(12, 8))
+        if self.num_channels >= self.MAX_CHANNELS:
+            self.add_channel_btn.configure(state="disabled")
 
         self.label = CTkLabel(self, text="Enter RTSP URL")
         self.label.pack(pady=(0, 16))
@@ -118,159 +131,193 @@ class BaseApp(CTk):
         )
 
     def channel_box_layout(self) -> None:
-        layout = self._get_layout(self.num_channels)
-
         header = CTkFrame(self.rtsp_box, fg_color="transparent")
         header.pack(fill="x", padx=24, pady=(16, 10))
 
         title = CTkLabel(header, text="RTSP Sources", anchor="w")
         title.pack(fill="x")
 
-        subtitle = CTkLabel(
+        CTkLabel(
             header,
             text="Connect each channel to a live RTSP endpoint.",
             anchor="w",
             justify="left",
-        )
-        subtitle.pack(fill="x", pady=(2, 0))
-
-        for channel_index in range(self.num_channels):
-            channel_box = CTkFrame(self.rtsp_box, corner_radius=14, height=self.CARD_MIN_HEIGHT)
-            channel_box.pack(fill="x", padx=16, pady=(0, layout["channel_spacing"]))
-            channel_box.pack_propagate(False)
-            self.channel_boxes.append(channel_box)
-
-            channel_header = CTkFrame(channel_box, fg_color="transparent")
-            channel_header.pack(fill="x", padx=14, pady=(8, 2))
-
-            channel_label = CTkLabel(
-                channel_header,
-                text=f"Channel {channel_index + 1}",
-                anchor="w",
-            )
-            channel_label.pack(side="left")
-
-            channel_hint = CTkLabel(
-                channel_header,
-                text="RTSP input",
-                anchor="e",
-            )
-            channel_hint.pack(side="right")
-
-            row = CTkFrame(channel_box, fg_color="transparent")
-            row.pack(fill="x", padx=14, pady=(0, 8))
-
-            entry = CTkEntry(row, width=200, placeholder_text="rtsp://camera-address/stream")
-            entry.pack(side="left", padx=(0, 10), expand=True, fill="x")
-            entry.bind("<Button-3>", lambda event, current_entry=entry: self.show_entry_context_menu(event, current_entry))
-            self.entries.append(entry)
-
-            disconnect_button = CTkButton(
-                row,
-                text="",
-                width=40,
-                state="disabled",
-                fg_color="#ff9999",
-                hover_color="#ff9999",
-                text_color="white",
-                text_color_disabled="#fff5f5",
-                image=self.button_icons["stop"],
-                compound="left",
-                command=lambda index=channel_index: self.stop_stream(index),
-            )
-
-            disconnect_button.pack(side="right", padx=(10, 0))
-            self.disconnect_buttons.append(disconnect_button)
-
-            submit_button = CTkButton(
-                row,
-                text="",
-                width=40,
-                fg_color="#6DCD01",
-                hover_color="#4D7A01",
-                image=self.button_icons["play"],
-                compound="left",
-                command=lambda index=channel_index: self.submit_entry(index),
-            )
-            submit_button.pack(side="right")
-            self.connect_buttons.append(submit_button)
+        ).pack(fill="x", pady=(2, 0))
 
     def stats_box_layout(self) -> None:
-        layout = self._get_layout(self.num_channels)
-
         header = CTkFrame(self.stats_box, fg_color="transparent")
         header.pack(fill="x", padx=24, pady=(16, 10))
 
         title = CTkLabel(header, text="Channel Stats", anchor="w")
         title.pack(fill="x")
 
-        subtitle = CTkLabel(
+        CTkLabel(
             header,
             text="Live connection and processing state for each channel.",
             anchor="w",
             justify="left",
+        ).pack(fill="x", pady=(2, 0))
+
+    def _add_channel_row(self, idx: int) -> None:
+        # --- RTSP panel card ---
+        channel_box = CTkFrame(self.rtsp_box, corner_radius=14, height=self.CARD_MIN_HEIGHT)
+        channel_box.pack(fill="x", padx=16, pady=(0, self.CHANNEL_SPACING))
+        channel_box.pack_propagate(False)
+        self.channel_boxes.append(channel_box)
+
+        channel_header = CTkFrame(channel_box, fg_color="transparent")
+        channel_header.pack(fill="x", padx=14, pady=(8, 2))
+
+        tag_save_btn = CTkButton(
+            channel_header, text="Save", width=48,
+            fg_color="transparent", hover_color="#454040",
+            text_color=("gray10", "gray90"),
         )
-        subtitle.pack(fill="x", pady=(2, 0))
+        tag_save_btn.pack(side="right")
+        self.tag_save_btns.append(tag_save_btn)
+        tag_save_btn.configure(
+            command=lambda b=tag_save_btn: self._save_tag(self.tag_save_btns.index(b))
+        )
 
-        for channel_index in range(self.num_channels):
-            stats_row = CTkFrame(self.stats_box, corner_radius=14, height=self.CARD_MIN_HEIGHT)
-            stats_row.pack(fill="x", padx=16, pady=(0, layout["channel_spacing"]))
-            stats_row.pack_propagate(False)
+        tag_entry = CTkEntry(channel_header, width=120, placeholder_text="label...")
+        tag_entry.pack(side="right", padx=(4, 4))
+        self.tag_entries.append(tag_entry)
 
-            stats_content = CTkFrame(stats_row, fg_color="transparent")
-            stats_content.pack(fill="both", expand=True, padx=14, pady=(8, 6))
-            stats_content.grid_columnconfigure(0, weight=1)
-            stats_content.grid_columnconfigure(1, weight=1)
-            stats_content.grid_columnconfigure(2, weight=0)
-            stats_content.grid_rowconfigure(0, weight=1)
-            stats_content.grid_rowconfigure(1, weight=1)
+        self.channel_tags.append("")
 
-            frames_label = CTkLabel(
-                stats_content,
-                text="Frames: 0",
-                anchor="w",
-            )
-            frames_label.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=(0, 1))
+        channel_label = CTkLabel(channel_header, text=f"Channel {idx + 1} :", anchor="w")
+        channel_label.pack(side="left")
+        self.channel_labels.append(channel_label)
 
-            fps_label = CTkLabel(
-                stats_content,
-                text="FPS: 0.0",
-                anchor="w",
-            )
-            fps_label.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(0, 1))
+        row = CTkFrame(channel_box, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=(0, 8))
 
-            badge = CTkLabel(
-                stats_content,
-                text="Idle",
-                anchor="e",
-                width=96,
-                height=16,
-            )
-            badge.grid(row=0, column=2, sticky="e", pady=0)
-            self.stats_badges.append(badge)
+        entry = CTkEntry(row, width=200, placeholder_text="rtsp://camera-address/stream")
+        entry.pack(side="left", padx=(0, 10), expand=True, fill="x")
+        entry.bind("<Button-3>", lambda event, e=entry: self.show_entry_context_menu(event, e))
+        self.entries.append(entry)
 
-            resolution_label = CTkLabel(
-                stats_content,
-                text="Resolution: -",
-                anchor="w",
-            )
-            resolution_label.grid(row=1, column=0, sticky="w", padx=(0, 12))
+        disc_btn = CTkButton(
+            row, text="", width=40, state="disabled",
+            fg_color="#ff9999", hover_color="#ff9999",
+            text_color="white", text_color_disabled="#fff5f5",
+            image=self.button_icons["stop"], compound="left",
+        )
+        disc_btn.configure(command=lambda b=disc_btn: self.stop_stream(self.disconnect_buttons.index(b)))
+        disc_btn.pack(side="right", padx=(10, 0))
+        self.disconnect_buttons.append(disc_btn)
 
-            extra_label = CTkLabel(
-                stats_content,
-                text="Latency: -",
-                anchor="w",
-            )
-            extra_label.grid(row=1, column=1, sticky="w")
+        conn_btn = CTkButton(
+            row, text="", width=40,
+            fg_color="#6DCD01", hover_color="#4D7A01",
+            image=self.button_icons["play"], compound="left",
+        )
+        conn_btn.configure(command=lambda b=conn_btn: self.submit_entry(self.connect_buttons.index(b)))
+        conn_btn.pack(side="right")
+        self.connect_buttons.append(conn_btn)
 
-            self.stats_value_labels.append(
-                {
-                    "frames": frames_label,
-                    "fps": fps_label,
-                    "resolution": resolution_label,
-                    "extra": extra_label,
-                }
-            )
+        # --- Stats panel card ---
+        stats_row = CTkFrame(self.stats_box, corner_radius=14, height=self.CARD_MIN_HEIGHT)
+        stats_row.pack(fill="x", padx=16, pady=(0, self.CHANNEL_SPACING))
+        stats_row.pack_propagate(False)
+        self.stats_rows.append(stats_row)
+
+        stats_content = CTkFrame(stats_row, fg_color="transparent")
+        stats_content.pack(fill="both", expand=True, padx=14, pady=(8, 6))
+        stats_content.grid_columnconfigure(0, weight=1)
+        stats_content.grid_columnconfigure(1, weight=1)
+        stats_content.grid_columnconfigure(2, weight=0)
+        stats_content.grid_rowconfigure(0, weight=1)
+        stats_content.grid_rowconfigure(1, weight=1)
+
+        frames_label = CTkLabel(stats_content, text="Frames: 0", anchor="w")
+        frames_label.grid(row=0, column=0, sticky="w", padx=(0, 12), pady=(0, 1))
+
+        fps_label = CTkLabel(stats_content, text="FPS: 0.0", anchor="w")
+        fps_label.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=(0, 1))
+
+        badge = CTkLabel(stats_content, text="Idle", anchor="e", width=96, height=16)
+        badge.grid(row=0, column=2, sticky="e", pady=0)
+        self.stats_badges.append(badge)
+
+        resolution_label = CTkLabel(stats_content, text="Resolution: -", anchor="w")
+        resolution_label.grid(row=1, column=0, sticky="w", padx=(0, 12))
+
+        extra_label = CTkLabel(stats_content, text="Latency: -", anchor="w")
+        extra_label.grid(row=1, column=1, sticky="w")
+
+        self.stats_value_labels.append({
+            "frames": frames_label,
+            "fps": fps_label,
+            "resolution": resolution_label,
+            "extra": extra_label,
+        })
+
+        del_btn = CTkButton(
+            stats_content, text="✕", width=32, height=20,
+            fg_color="#555555", hover_color="#333333", text_color="white",
+        )
+        del_btn.configure(command=lambda b=del_btn: self.delete_channel(self.delete_buttons.index(b)))
+        del_btn.grid(row=1, column=2, sticky="e")
+        self.delete_buttons.append(del_btn)
+
+        self._update_delete_button_states()
+
+    def _remove_channel_row(self, idx: int) -> None:
+        self.channel_boxes[idx].destroy()
+        self.stats_rows[idx].destroy()
+
+        self.channel_boxes.pop(idx)
+        self.channel_labels.pop(idx)
+        self.entries.pop(idx)
+        self.connect_buttons.pop(idx)
+        self.disconnect_buttons.pop(idx)
+        self.stats_rows.pop(idx)
+        self.stats_badges.pop(idx)
+        self.stats_value_labels.pop(idx)
+        self.delete_buttons.pop(idx)
+        self.channel_tags.pop(idx)
+        self.tag_entries.pop(idx)
+        self.tag_save_btns.pop(idx)
+
+        for i, lbl in enumerate(self.channel_labels):
+            lbl.configure(text=f"Channel {i + 1} :")
+
+        self._update_delete_button_states()
+        self.add_channel_btn.configure(state="normal")
+
+    def _update_delete_button_states(self) -> None:
+        state = "normal" if len(self.delete_buttons) > self.MIN_CHANNELS else "disabled"
+        for btn in self.delete_buttons:
+            btn.configure(state=state)
+
+    def _save_tag(self, idx: int) -> None:
+        self.channel_tags[idx] = self.tag_entries[idx].get()
+        self.tag_entries[idx].configure(state="disabled")
+        btn = self.tag_save_btns[idx]
+        btn.configure(text="Edit",
+                      command=lambda b=btn: self._edit_tag(self.tag_save_btns.index(b)))
+
+    def _edit_tag(self, idx: int) -> None:
+        self.tag_entries[idx].configure(state="normal")
+        self.tag_entries[idx].focus()
+        btn = self.tag_save_btns[idx]
+        btn.configure(text="Save",
+                      command=lambda b=btn: self._save_tag(self.tag_save_btns.index(b)))
+
+    def set_channel_tag(self, idx: int, tag: str) -> None:
+        self.channel_tags[idx] = tag
+        self.tag_entries[idx].configure(state="normal")
+        self.tag_entries[idx].delete(0, "end")
+        btn = self.tag_save_btns[idx]
+        if tag:
+            self.tag_entries[idx].insert(0, tag)
+            self.tag_entries[idx].configure(state="disabled")
+            btn.configure(text="Edit",
+                          command=lambda b=btn: self._edit_tag(self.tag_save_btns.index(b)))
+        else:
+            btn.configure(text="Save",
+                          command=lambda b=btn: self._save_tag(self.tag_save_btns.index(b)))
 
     def set_channel_stats(
         self,
@@ -343,9 +390,15 @@ class BaseApp(CTk):
 
     def submit_entry(self, channel_index: int) -> None:
         raise NotImplementedError("submit_entry must be implemented in a subclass.")
-    
+
     def stop_stream(self, channel_index: int) -> None:
         raise NotImplementedError("stop_stream must be implemented in a subclass.")
+
+    def add_channel(self) -> None:
+        raise NotImplementedError("add_channel must be implemented in a subclass.")
+
+    def delete_channel(self, channel_index: int) -> None:
+        raise NotImplementedError("delete_channel must be implemented in a subclass.")
 
     def bind_shortcuts(self) -> None:
         self.bind_all("<Control-o>", self.open_from)

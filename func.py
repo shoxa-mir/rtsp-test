@@ -13,7 +13,7 @@ class App(BaseApp):
     UI_REFRESH_MS = 250
     INFERENCE_EVERY_N = 3
 
-    def __init__(self, num_channels: int = 12) -> None:
+    def __init__(self, num_channels: int = BaseApp.DEFAULT_CHANNELS) -> None:
         super().__init__(num_channels=num_channels)
         self.capture_manager = CaptureManager()
         self.frame_counts = [0] * self.num_channels
@@ -77,9 +77,12 @@ class App(BaseApp):
             return
 
         lines = []
-        for channel_index, entry in enumerate(self.entries, start=1):
-            value = entry.get().strip()
-            lines.append(f'channel{channel_index}: "{value}"')
+        for i, entry in enumerate(self.entries):
+            url = entry.get().strip()
+            tag = self.channel_tags[i]
+            lines.append(f"channel{i + 1}:")
+            lines.append(f'    tag: "{tag}"')
+            lines.append(f'    url: "{url}"')
 
         config_file = Path(config_path)
         config_file.write_text("\n".join(lines), encoding="utf-8")
@@ -100,28 +103,38 @@ class App(BaseApp):
         for entry in self.entries:
             entry.delete(0, "end")
 
-        loaded_channels = 0
+        channel_data: dict[int, dict] = {}
+        current_channel: int | None = None
+
         for line in lines:
-            if ":" not in line:
+            if not line.strip():
                 continue
+            is_indented = line[0] in (" ", "\t")
+            key, _, raw = line.strip().partition(":")
+            key = key.strip().lower()
+            value = raw.strip().strip('"')
 
-            channel_name, raw_value = line.split(":", maxsplit=1)
-            channel_name = channel_name.strip().lower()
-            raw_value = raw_value.strip()
+            if not is_indented:
+                current_channel = None
+                if key.startswith("channel") and key[7:].isdigit():
+                    idx = int(key[7:]) - 1
+                    current_channel = idx
+                    channel_data[idx] = {"url": "", "tag": ""}
+                    if value:
+                        channel_data[idx]["url"] = value
+            elif current_channel is not None:
+                if key == "url":
+                    channel_data[current_channel]["url"] = value
+                elif key == "tag":
+                    channel_data[current_channel]["tag"] = value
 
-            if not channel_name.startswith("channel"):
+        loaded_channels = 0
+        for idx, data in channel_data.items():
+            if not 0 <= idx < len(self.entries):
                 continue
-
-            channel_number_text = channel_name.removeprefix("channel")
-            if not channel_number_text.isdigit():
-                continue
-
-            channel_index = int(channel_number_text) - 1
-            if not 0 <= channel_index < len(self.entries):
-                continue
-
-            value = raw_value.strip().strip('"')
-            self.entries[channel_index].insert(0, value)
+            if data["url"]:
+                self.entries[idx].insert(0, data["url"])
+            self.set_channel_tag(idx, data["tag"])
             loaded_channels += 1
 
         self.label.configure(
@@ -144,6 +157,32 @@ class App(BaseApp):
         if len(ts) < 2:
             return 0.0
         return (len(ts) - 1) / max(ts[-1] - ts[0], 1e-6)
+
+    def add_channel(self) -> None:
+        idx = self.num_channels
+        self.frame_counts.append(0)
+        self.fps_timestamps.append(deque(maxlen=30))
+        self.resolutions.append(None)
+        self.frame_skip_counters.append(0)
+        self.channel_states.append(self._default_channel_state())
+        self._rendered_states.append({})
+        self.num_channels += 1
+        self._add_channel_row(idx)
+        self._set_channel_state(idx)
+        if self.num_channels >= self.MAX_CHANNELS:
+            self.add_channel_btn.configure(state="disabled")
+
+    def delete_channel(self, channel_index: int) -> None:
+        self.capture_manager.stop_stream(channel_index)
+        self.capture_manager.shift_workers_down(channel_index)
+        self.frame_counts.pop(channel_index)
+        self.fps_timestamps.pop(channel_index)
+        self.resolutions.pop(channel_index)
+        self.frame_skip_counters.pop(channel_index)
+        self.channel_states.pop(channel_index)
+        self._rendered_states.pop(channel_index)
+        self.num_channels -= 1
+        self._remove_channel_row(channel_index)
 
     def exit_app(self, event=None) -> None:
         self.capture_manager.stop_all_nowait()
